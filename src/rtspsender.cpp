@@ -9,9 +9,12 @@
 
 RtspSender::RtspSender(std::string ip, int port)
 {
+    pthread_mutex_init(&m_mutex, nullptr);
     m_ip = ip;
     m_port = port;
     m_seq = 0;
+    m_rtpHeader = new RtpHeader;
+    rtpHeaderInit(m_rtpHeader, 2, 0 , 0, 0, 0, 96, m_seq, 0, 0);
 }
 
 int RtspSender::createUdpSocket(int localRtpPort)
@@ -45,8 +48,9 @@ bool RtspSender::allocSocket(int localRtpPort)
     return false;
 }
 
-void RtspSender::sendData(uint8_t* data, int length, uint16_t cseq, uint32_t timestamp, uint32_t ssrc)
+void RtspSender::sendData(uint8_t* data, int length, uint16_t /*cseq*/, uint32_t timestamp, uint32_t ssrc)
 {
+    pthread_mutex_lock(&m_mutex);
     if(data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01)
     {
         data += 3;
@@ -59,15 +63,15 @@ void RtspSender::sendData(uint8_t* data, int length, uint16_t cseq, uint32_t tim
     }
     if (length <= RTP_MAX_PKT_SIZE) // nalu长度小于最大包场：单一NALU单元模式
     {
-        RtpHeader rtpHeader;
         if(m_seq == 0xFFFF)
-                m_seq = 0;
-            else
-                m_seq++;
-        rtpHeaderInit(&rtpHeader, 2, 0 , 0, 0, 0, 96, m_seq, timestamp, ssrc);
+            m_seq = 0;
+        else
+            m_seq++;
+        m_rtpHeader->bs.seq = htons(m_seq);
+        m_rtpHeader->bs.timestamp = htonl(timestamp);
+        m_rtpHeader->bs.ssrc = htonl(ssrc);
         uint8_t rtpData[4096];
-        int n = parserRtpData(rtpData, &rtpHeader, data, length);
-        
+        int n = parserRtpData(rtpData, m_rtpHeader, data, length);
         struct sockaddr_in addr;
         addr.sin_family = AF_INET;
         addr.sin_port = htons(m_port);
@@ -90,12 +94,13 @@ void RtspSender::sendData(uint8_t* data, int length, uint16_t cseq, uint32_t tim
                 pktLength = length - RTP_MAX_PKT_SIZE * i;
             else
                 pktLength = RTP_MAX_PKT_SIZE;
-            RtpHeader rtpHeader;
             if(m_seq == 0xFFFF)
                 m_seq = 0;
             else
                 m_seq++;
-            rtpHeaderInit(&rtpHeader, 2, 0 , 0, 0, 0, 96, m_seq, timestamp, 0x88888888);
+            m_rtpHeader->bs.seq = htons(m_seq);
+            m_rtpHeader->bs.timestamp = htonl(timestamp);
+            m_rtpHeader->bs.ssrc = htonl(ssrc);
 
             tmpData[0] = (naluType & 0xE0) | 28;
             tmpData[1] = naluType & 0x1F;
@@ -104,10 +109,8 @@ void RtspSender::sendData(uint8_t* data, int length, uint16_t cseq, uint32_t tim
             else if (i == num - 1) //最后一包数据
                 tmpData[1] |= 0x40; // end
             memcpy(tmpData + 2, data, pktLength);
-            
             uint8_t rtpData[4096];
-            int n = parserRtpData(rtpData, &rtpHeader, tmpData, pktLength+2);
-        
+            int n = parserRtpData(rtpData, m_rtpHeader, tmpData, pktLength+2);
             struct sockaddr_in addr;
             addr.sin_family = AF_INET;
             addr.sin_port = htons(m_port);
@@ -119,6 +122,7 @@ void RtspSender::sendData(uint8_t* data, int length, uint16_t cseq, uint32_t tim
             data += pktLength;
         }
     }
+    pthread_mutex_unlock(&m_mutex);
 }
 
 void RtspSender::rtpHeaderInit(RtpHeader* rtp, int version, int padding, int extention, int csrcnum, 

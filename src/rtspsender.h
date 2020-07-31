@@ -2,6 +2,7 @@
 #define RTSPSENDER_H
 #include <iostream>
 #include <string.h>
+#include <pthread.h>
 
 union RtpHeader
 {
@@ -38,6 +39,8 @@ private:
     int m_port;
     int m_sockfd;
     uint16_t m_seq;
+    RtpHeader* m_rtpHeader;
+    pthread_mutex_t m_mutex;
 };
 
 #endif //RTSPSENDER_H
